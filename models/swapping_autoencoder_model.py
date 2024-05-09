@@ -11,6 +11,7 @@ class SwappingAutoencoderModel(BaseModel):
         BaseModel.modify_commandline_options(parser, is_train)
         parser.add_argument("--spatial_code_ch", default=8, type=int)
         parser.add_argument("--global_code_ch", default=2048, type=int)
+        parser.add_argument("--lambda_L2", default=1.0, type=float)
         parser.add_argument("--lambda_R1", default=10.0, type=float)
         parser.add_argument("--lambda_patch_R1", default=1.0, type=float)
         parser.add_argument("--lambda_L1", default=1.0, type=float)
@@ -79,6 +80,45 @@ class SwappingAutoencoderModel(BaseModel):
             pred_mix, should_be_classified_as_real=False
         ) * (0.5 * self.opt.lambda_GAN)
 
+        target_real = torch.ones_like(pred_real)
+        target_rec = torch.zeros_like(pred_rec)
+        target_mix = torch.zeros_like(pred_mix)
+    
+        losses["L2_real"] = loss.l2_loss(pred_real, target_real) * self.opt.lambda_L2
+        losses["L2_rec"] = loss.l2_loss(pred_rec, target_rec) * (0.5 * self.opt.lambda_L2)
+        losses["L2_mix"] = loss.l2_loss(pred_mix, target_mix) * (0.5 * self.opt.lambda_L2)
+
+        return losses
+    
+    def compute_swap_discriminator_losses(self, real, sp, gl):
+        losses = {}
+    
+        # Swap images
+        swap_real = self.swap(real)
+        swap_rec = self.G(sp, self.swap(gl))
+    
+        # Compute discriminator predictions for swapped images
+        pred_swap_real = self.D(swap_real)
+        pred_swap_rec = self.D(swap_rec)
+
+        
+        # Calculate GAN loss for swapped images
+        losses["D_swap_real"] = loss.gan_loss(
+            pred_swap_real, should_be_classified_as_real=True
+        ) * self.opt.lambda_GAN
+
+        losses["D_swap_rec"] = loss.gan_loss(
+            pred_swap_rec, should_be_classified_as_real=False
+        ) * (0.5 * self.opt.lambda_GAN)
+ 
+
+        target_swap_real = torch.ones_like(pred_swap_real)
+        target_swap_rec = torch.zeros_like(pred_swap_rec)
+    
+        losses["L2_swap_real"] = loss.l2_loss(pred_swap_real, target_swap_real) * self.opt.lambda_L2
+        losses["L2_swap_rec"] = loss.l2_loss(pred_swap_rec, target_swap_rec) * (0.5 * self.opt.lambda_L2)
+
+    
         return losses
 
     def get_random_crops(self, x, crop_window=None):
@@ -130,6 +170,11 @@ class SwappingAutoencoderModel(BaseModel):
         if self.opt.lambda_PatchGAN > 0.0:
             patch_losses = self.compute_patch_discriminator_losses(real, mix)
             losses.update(patch_losses)
+
+        # Compute swap discriminator losses and add them to the total losses
+        sp2, gl2 = self.E(mix)
+        swap_discriminator_losses = self.compute_swap_discriminator_losses(real, sp2, gl2)
+        losses.update(swap_discriminator_losses)
 
         metrics = {}  # no metrics to report for the Discriminator iteration
 
