@@ -7,6 +7,9 @@ import torchvision
 import util
 from .stylegan2_layers import Downsample
 
+def l2_loss(pred, target):
+    bs = pred.size(0)
+    return F.mse_loss(pred, target, reduction='none').view(bs, -1).mean(dim=1)
 
 def gan_loss(pred, should_be_classified_as_real):
     bs = pred.size(0)
