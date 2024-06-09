@@ -8,10 +8,15 @@ from models.networks import BaseNetwork
 from models.networks.stylegan2_layers import ResBlock, ConvLayer, ToRGB, EqualLinear, Blur, Upsample, make_kernel
 from models.networks.stylegan2_op import upfirdn2d
 
+import torchvision.transforms as transforms
+import torchvision.models.segmentation as segmentation
 
 class ToSpatialCode(torch.nn.Module):
     def __init__(self, inch, outch, scale):
         super().__init__()
+        self.segmentation_model = segmentation.deeplabv3_resnet50(pretrained=True)
+        self.segmentation_classes = 10
+
         hiddench = inch // 2
         self.conv1 = ConvLayer(inch, hiddench, 1, activate=True, bias=True)
         self.conv2 = ConvLayer(hiddench, outch, 1, activate=False, bias=True)
@@ -20,7 +25,14 @@ class ToSpatialCode(torch.nn.Module):
         self.blur = Blur([1, 3, 3, 1], pad=(2, 1))
         self.register_buffer('kernel', make_kernel([1, 3, 3, 1]))
 
+        self.alpha = 0.5
+
     def forward(self, x):
+        segmentation_result = self.segmentation_model(x)['out']
+        segmentation_result = F.interpolate(segmentation_result, size=x.shape[-2:], mode='nearest')
+        weighted_segmentation = self.alpha * segmentation_result
+        x = torch.cat([x, weighted_segmentation], dim=1)
+        
         x = self.conv1(x)
         x = self.conv2(x)
         for i in range(int(np.log2(self.scale))):
@@ -84,6 +96,7 @@ class StyleGAN2ResnetEncoder(BaseNetwork):
             )
         )
 
+
     def nc(self, idx):
         nc = self.opt.netE_nc_steepness ** (5 + idx)
         nc = nc * self.opt.netE_scale_capacity
@@ -108,7 +121,9 @@ class StyleGAN2ResnetEncoder(BaseNetwork):
         gl = self.ToGlobalCode(x)
         sp = util.normalize(sp)
         gl = util.normalize(gl)
+
         if extract_features:
             return sp, gl, feature
         else:
             return sp, gl
+
